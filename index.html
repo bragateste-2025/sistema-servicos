@@ -1627,7 +1627,15 @@ ou 8FW4V75R+8W (Plus Code) ou ///exemplo.teste.local (what3words)"></textarea>
       </div>
       <div class="serv-filter-hint">Você pode marcar <b>várias opções em cada filtro</b>. No mesmo filtro = <b>OU</b>; entre filtros diferentes = <b>E</b>.</div>
       <div class="serv-count" id="servCount"></div>
-      <div class="serv-legenda"><span><i class="serv-dot serv-dot-pendente"></i>Pendente</span><span><i class="serv-dot serv-dot-despachado"></i>Despachado</span></div>
+      <div class="serv-legenda">
+        <span><i class="serv-dot serv-dot-pendente"></i>Pendente</span>
+        <span><i class="serv-dot serv-dot-despachado"></i>Despachado</span>
+        <span class="serv-legenda-sep">|</span>
+        <span>🌳 Poda</span>
+        <span>🌳🌳 Poda arborizada</span>
+        <span>🖌️ CSI</span>
+        <span>⚡ Degradação</span>
+      </div>
       </div>
       <div id="servMapa" class="serv-map"></div>
       <div class="serv-table" id="servTabela"><div class="serv-empty">Importe um Excel para visualizar os serviços.</div></div>
@@ -5827,6 +5835,7 @@ function abrirAba(nome,btn){
   if(nome==='servicos')setTimeout(()=>{inicializarMapaServicos();if(mapaServicos)mapaServicos.invalidateSize({pan:false});},80);
 }
 function normServ(v){return String(v??'').trim();}
+function servExecutado(r){ return normServ(r.status).toLowerCase().startsWith('execut'); }
 function extrairGPSServ(v){
   if(v==null)return null;
   let s=String(v).trim().replace(/;/g,',');
@@ -5885,8 +5894,9 @@ function servMatchesSearch(r){
 function valoresCampo(c){
   // Filtro em cascata: as opções de cada campo são calculadas considerando
   // pesquisa + todos os outros filtros, mas ignorando o próprio campo.
+  // Serviços com status "Executado" são sempre desconsiderados.
   const vals=new Set();
-  servicosExcel.forEach(r=>{if(servMatchesSearch(r)&&servMatches(r,c)){const v=normServ(r[c]);if(v)vals.add(v);}});
+  servicosExcel.forEach(r=>{if(servExecutado(r))return;if(servMatchesSearch(r)&&servMatches(r,c)){const v=normServ(r[c]);if(v)vals.add(v);}});
   // Mantém selecionados visíveis para permitir desfazer a seleção mesmo quando
   // outra combinação temporariamente os deixa fora do conjunto disponível.
   servFiltros[c].forEach(v=>vals.add(v));
@@ -5937,11 +5947,14 @@ function aplicarFiltrosServicos(){
   const executar=()=>{
     const q=normServ(document.getElementById('servBusca')?.value).toLowerCase();
     servicosFiltrados=servicosExcel.filter(r=>{
+      if(servExecutado(r))return false; // desconsidera serviços já executados
       if(q&&!Object.keys(r).some(k=>!k.startsWith('__')&&normServ(r[k]).toLowerCase().includes(q)))return false;
       return SERV_CAMPOS.every(c=>servFiltros[c].size===0||servFiltros[c].has(normServ(r[c])));
     });
     let pontos=0;for(const r of servicosFiltrados)if(r.__gps)pontos++;
-    document.getElementById('servCount').textContent=servicosExcel.length?`${servicosFiltrados.length} serviço(s) de ${servicosExcel.length} carregado(s). Pontos no mapa: ${pontos}.`:'';
+    const totalExecutados=servicosExcel.reduce((n,r)=>n+(servExecutado(r)?1:0),0);
+    const txtExecutados=totalExecutados?` (${totalExecutados} executado(s) desconsiderado(s))`:'';
+    document.getElementById('servCount').textContent=servicosExcel.length?`${servicosFiltrados.length} serviço(s) de ${servicosExcel.length} carregado(s). Pontos no mapa: ${pontos}.${txtExecutados}`:'';
     document.getElementById('btnExportarServKml').disabled=pontos===0;
     montarFiltrosServicos();
     renderizarMapaServicos();
@@ -5951,6 +5964,25 @@ function aplicarFiltrosServicos(){
   servFiltroTimer=setTimeout(executar,isTyping?180:0);
 }
 function googleMapsServ(r){const g=r.__gps;return g?'https://www.google.com/maps?q='+encodeURIComponent(g.lat+','+g.lon):'';}
+function infoDefeitoServico(defeito){
+  const d=normServ(defeito).toLowerCase();
+  // "Poda arborizada" precisa ser verificado antes de "poda" simples.
+  if(d.includes('arboriz')) return {emoji:'🌳🌳',peq:true};   // poda arborizada = 2 árvores
+  if(d.includes('poda'))    return {emoji:'🌳',peq:false};    // poda = 1 árvore
+  if(d.includes('csi'))     return {emoji:'🖌️',peq:false};    // CSI = pincel
+  if(d.includes('degrada')) return {emoji:'⚡',peq:false};    // degradação = raio
+  return {emoji:'●',peq:false};
+}
+function criarIconeServico(r,cor){
+  const info=infoDefeitoServico(r.defeito);
+  return L.divIcon({
+    className:'serv-marker-icon',
+    html:'<div class="serv-marker-badge'+(info.peq?' peq':'')+'" style="background:'+cor+'">'+info.emoji+'</div>',
+    iconSize:[24,24],
+    iconAnchor:[12,12],
+    popupAnchor:[0,-13]
+  });
+}
 function gerarPopupServico(r){
   const g=r.__gps,id=servId(r),link=googleMapsServ(r);
   const mapsBtn=link?'<a href="'+link+'" target="_blank" rel="noopener">Abrir no Google Maps</a>':'';
@@ -5985,7 +6017,7 @@ function atualizarMarcadorEPopupServico(rowKey){
   const r=servicosExcel.find(x=>x.__rowKey===Number(rowKey));if(!r)return;
   const m=marcadoresServicos.find(x=>x.__servKey===Number(rowKey));if(!m)return;
   const id=servId(r),cor=corPontoServico(id);
-  m.setStyle({color:cor,fillColor:cor});
+  m.setIcon(criarIconeServico(r,cor));
   m.setPopupContent(gerarPopupServico(r));
 }
 function salvarDespachoServico(rowKey){
@@ -6056,8 +6088,7 @@ function renderizarMapaServicos(){
     const id=servId(r);
     const html=gerarPopupServico(r);
     const cor=corPontoServico(id);
-    // Canvas + circleMarker é muito mais leve que milhares de ícones DOM/SVG.
-    const m=L.circleMarker([g.lat,g.lon],{radius:6,weight:1.5,fillOpacity:.85,color:cor,fillColor:cor,renderer:mapa.options.renderer||L.canvas()});
+    const m=L.marker([g.lat,g.lon],{icon:criarIconeServico(r,cor)});
     m.addTo(mapa._servLayer).bindPopup(html,{maxWidth:360,autoPanPadding:[20,20]});
     m.__servKey=r.__rowKey;m.__servId=id;
     m.on('click',()=>selecionarLinhaServico(r.__rowKey,false));
@@ -6347,7 +6378,7 @@ document.addEventListener('click',e=>{if(!e.target.closest('.multi-select'))docu
   border:1px solid rgba(120,180,190,.28) !important;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.025) !important;
   font-size:14px !important;
-  color:#ffffff !important;   
+  color:#ffffff !important;
 }
 #aba-servicos #servBusca:focus{
   border-color:#2fd6c4 !important;
@@ -6501,8 +6532,9 @@ document.addEventListener('click',e=>{if(!e.target.closest('.multi-select'))docu
 <style id="v31-despacho-servico">
 /* V31 — campo de "informação / despacho" dentro do popup do ponto de serviço,
    e legenda de cores (pendente = teal, despachado = laranja). */
-.serv-legenda{display:flex;gap:16px;align-items:center;margin:6px 0 0;font-size:11px;color:var(--paper-dim,#9cb3b8)}
+.serv-legenda{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:6px 0 0;font-size:11px;color:var(--paper-dim,#9cb3b8)}
 .serv-legenda span{display:inline-flex;align-items:center;gap:6px}
+.serv-legenda-sep{opacity:.35}
 .serv-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
 .serv-dot-pendente{background:#2fd6c4}
 .serv-dot-despachado{background:#f5a623}
@@ -6519,6 +6551,21 @@ document.addEventListener('click',e=>{if(!e.target.closest('.multi-select'))docu
 .serv-desp-save{background:#f5a623;color:#3a2500}
 .serv-desp-clear{background:#e6e9ea;color:#33484c}
 .serv-desp-msg{margin-top:6px;font-size:11px;color:#0f8a7c;min-height:14px}
+</style>
+
+<style id="v32-icones-defeito">
+/* V32 — ícones por tipo de defeito nos marcadores do mapa de serviços.
+   A cor de fundo do círculo continua indicando pendente/despachado;
+   o emoji dentro indica o tipo de defeito (poda, poda arborizada, CSI, degradação). */
+.serv-marker-icon{background:transparent!important;border:none!important}
+.serv-marker-badge{
+  width:24px;height:24px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:13px;line-height:1;
+  box-shadow:0 0 0 2px rgba(255,255,255,.9),0 1px 3px rgba(0,0,0,.5);
+  cursor:pointer;
+}
+.serv-marker-badge.peq{font-size:9.5px;letter-spacing:-1px}
 </style>
 
 <script id="v22-ui-final-js">
