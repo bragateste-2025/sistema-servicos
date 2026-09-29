@@ -5886,17 +5886,38 @@ function servMatches(r,ignoreField){
   }
   return true;
 }
-function servMatchesSearch(r){
-  const q=normServ(document.getElementById('servBusca')?.value).toLowerCase();
-  if(!q)return true;
-  return Object.keys(r).some(k=>!k.startsWith('__')&&normServ(r[k]).toLowerCase().includes(q));
+/* PESQUISA GLOBAL: procura em TODAS as colunas do Excel (mesmo as que não têm filtro),
+   ignora acentos e maiúsculas/minúsculas, e aceita várias palavras em qualquer ordem
+   (ex.: "poste centro 123" acha linhas que contenham as 3 palavras, em campos diferentes).
+   Também inclui o texto de despacho salvo e as coordenadas GPS. */
+function servSemAcento(v){return String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();}
+function servTextoBusca(r){
+  if(r.__busca===undefined){
+    r.__busca=Object.keys(r).filter(k=>!k.startsWith('__')).map(k=>servSemAcento(k)+' '+servSemAcento(r[k])).join(' | ');
+  }
+  const d=(typeof servDespachos!=='undefined')?servDespachos[servId(r)]:null;
+  // Situação de despacho pesquisável: "despachado"/"despacho" ou "pendente", além do texto e da data
+  if(d&&d.texto){
+    const dt=d.data?servSemAcento(formatarDataDespacho(d.data)):'';
+    return r.__busca+' | despachado despacho '+servSemAcento(d.texto)+' '+dt;
+  }
+  return r.__busca+' | pendente';
+}
+function servTermosBusca(){
+  return servSemAcento(document.getElementById('servBusca')?.value).split(/\s+/).filter(Boolean);
+}
+function servMatchesSearch(r,termos){
+  termos=termos||servTermosBusca();
+  if(!termos.length)return true;
+  const t=servTextoBusca(r);
+  return termos.every(x=>t.includes(x));
 }
 function valoresCampo(c){
   // Filtro em cascata: as opções de cada campo são calculadas considerando
   // pesquisa + todos os outros filtros, mas ignorando o próprio campo.
   // Serviços com status "Executado" são sempre desconsiderados.
   const vals=new Set();
-  servicosExcel.forEach(r=>{if(servExecutado(r))return;if(servMatchesSearch(r)&&servMatches(r,c)){const v=normServ(r[c]);if(v)vals.add(v);}});
+  const termosB=servTermosBusca();servicosExcel.forEach(r=>{if(servExecutado(r))return;if(servMatchesSearch(r,termosB)&&servMatches(r,c)){const v=normServ(r[c]);if(v)vals.add(v);}});
   // Mantém selecionados visíveis para permitir desfazer a seleção mesmo quando
   // outra combinação temporariamente os deixa fora do conjunto disponível.
   servFiltros[c].forEach(v=>vals.add(v));
@@ -5945,10 +5966,10 @@ function aplicarFiltrosServicos(){
   clearTimeout(servFiltroTimer);
   const isTyping=document.activeElement?.id==='servBusca';
   const executar=()=>{
-    const q=normServ(document.getElementById('servBusca')?.value).toLowerCase();
+    const termos=servTermosBusca();
     servicosFiltrados=servicosExcel.filter(r=>{
       if(servExecutado(r))return false; // desconsidera serviços já executados
-      if(q&&!Object.keys(r).some(k=>!k.startsWith('__')&&normServ(r[k]).toLowerCase().includes(q)))return false;
+      if(!servMatchesSearch(r,termos))return false;
       return SERV_CAMPOS.every(c=>servFiltros[c].size===0||servFiltros[c].has(normServ(r[c])));
     });
     let pontos=0;for(const r of servicosFiltrados)if(r.__gps)pontos++;
