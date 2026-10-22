@@ -2639,7 +2639,7 @@ function paraNumero(str){
 // "Nº Clientes", "CLIENTES_ATIVOS" etc. em vez de "CLIENTES" exatamente.
 function normalizarChaveCampo(txt){
   return String(txt || '')
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, ' ')
     .trim();
@@ -3310,6 +3310,24 @@ function extrairCamposDescricao(texto){
     valor = valor.trim();
     if(valor) campos[chave] = valor;
   });
+
+  // formato 3 (KML do ARR/ARU): <description> em TEXTO SIMPLES, uma linha por
+  // campo ("𝗧𝗢𝗧𝗔𝗟_𝗖𝗟𝗜𝗘𝗡𝗧𝗘𝗦: 3"), com rótulos em letras Unicode "negrito".
+  // Sem <b> nem <table> os formatos acima não acham nada; aqui lemos linha a
+  // linha e normalizamos o rótulo (NFKC) para ASCII comum.
+  if(!Object.keys(campos).length){
+    const limpo = String(texto)
+      .replace(/<br\\s*\\/?>/gi, '\\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    limpo.split(/\\r?\\n/).forEach(linha => {
+      const m = linha.match(/^\\s*([^:]{1,60}?)\\s*:\\s*(.*\\S)\\s*$/);
+      if(!m) return;
+      const chave = m[1].normalize('NFKC').trim();
+      const valor = m[2].trim();
+      if(chave && valor) campos[chave] = valor;
+    });
+  }
 
   return campos;
 }
