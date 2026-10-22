@@ -3927,9 +3927,23 @@ function localizarNoGrafo(eqEntrada){
   return { alimentador: eqEntrada.alimentador, idx };
 }
 
+// tipos (pasta do KML) considerados elemento de corte/proteção: F = chave
+// fusível, R = religador, S = chave faca. Ajuste aqui se precisar incluir
+// outros (ex.: 'UP' = chave de operação em carga).
+const TIPOS_CORTE_PROTECAO = ['F', 'R', 'S'];
+
+function ehElementoCorteProtecao(eq){
+  const tipo = String(eq.tipo || '').trim().toUpperCase();
+  if(!TIPOS_CORTE_PROTECAO.includes(tipo)) return false;
+  const desc = String((eq.campos && eq.campos.DESCRICAO_TIPO) || '');
+  if(/chave\s*na\b/i.test(desc)) return false; // chave normalmente aberta não protege
+  return true;
+}
+
 // para cada equipamento pesquisado, traça o caminho até a origem (mesma lógica
-// do rastreamento de rede) e conta em quantos desses caminhos cada estrutura
-// de proteção aparece; devolve só quem protege 2 ou mais dos pesquisados
+// do rastreamento de rede) e escolhe SÓ o elemento de corte/proteção mais
+// próximo a montante. Estruturas no mesmo trecho caem no mesmo elemento e são
+// agrupadas, então ele aparece uma única vez listando o que protege.
 function calcularProtecaoComum(entradas){
   const chaveEq = eq => `${normalizarBusca(eq.codigo)}|${eq.alimentador}|${eq.lat}|${eq.lon}`;
   const entradasChaves = new Set(entradas.map(chaveEq));
@@ -3943,20 +3957,28 @@ function calcularProtecaoComum(entradas){
     if(!resultado.ok) continue;
     algumRastreavel = true;
 
-    resultado.passos.forEach(passo => {
-      passo.equipamentos.forEach(eqPasso => {
-        const chave = chaveEq({ codigo: eqPasso.codigo, alimentador: loc.alimentador, lat: eqPasso.lat, lon: eqPasso.lon });
-        if(entradasChaves.has(chave)) return; // não conta os próprios equipamentos pesquisados
-        if(!contagemMap.has(chave)){
-          contagemMap.set(chave, { eq: eqPasso, alimentador: loc.alimentador, alvos: new Set() });
-        }
-        contagemMap.get(chave).alvos.add(eqEntrada.codigo);
-      });
-    });
+    // caminho na ordem origem -> equipamento pesquisado
+    const caminho = [];
+    if(resultado.raizEquip) caminho.push(resultado.raizEquip);
+    resultado.passos.forEach(passo => passo.equipamentos.forEach(e => caminho.push(e)));
+
+    // do fim (mais perto do pesquisado) para o início: primeiro corte/proteção
+    let escolhido = null;
+    for(let i = caminho.length - 1; i >= 0; i--){
+      const e = caminho[i];
+      const chave = chaveEq({ codigo: e.codigo, alimentador: loc.alimentador, lat: e.lat, lon: e.lon });
+      if(entradasChaves.has(chave)) continue; // ignora os próprios pesquisados
+      if(ehElementoCorteProtecao(e)){ escolhido = { e, chave }; break; }
+    }
+    if(!escolhido) continue;
+
+    if(!contagemMap.has(escolhido.chave)){
+      contagemMap.set(escolhido.chave, { eq: escolhido.e, alimentador: loc.alimentador, alvos: new Set() });
+    }
+    contagemMap.get(escolhido.chave).alvos.add(eqEntrada.codigo);
   }
 
   const comuns = Array.from(contagemMap.values())
-    .filter(item => item.alvos.size >= 2)
     .sort((a, b) => b.alvos.size - a.alvos.size || a.eq.codigo.localeCompare(b.eq.codigo));
 
   return { comuns, algumRastreavel };
@@ -3999,12 +4021,14 @@ function atualizarProtecaoComum(entradas){
   }
 
   if(!comuns.length){
-    hint.textContent = 'Nenhuma estrutura de proteção protege 2 ou mais dos equipamentos pesquisados.';
+    hint.textContent = 'Nenhum elemento de corte/proteção encontrado a montante dos equipamentos pesquisados.';
     cont.innerHTML = '';
     return;
   }
 
-  hint.textContent = `${comuns.length} estrutura(s) de proteção protege(m) 2 ou mais dos equipamentos pesquisados:`;
+  hint.textContent = comuns.length === 1
+    ? 'Elemento de corte que protege os equipamentos pesquisados:'
+    : `${comuns.length} elementos de corte (cada um protege um grupo dos equipamentos pesquisados):`;
   cont.innerHTML = comuns.map(renderizarCardProtecaoComum).join('');
 }
 
